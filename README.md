@@ -70,10 +70,15 @@ Experiment web download traffic cap reached.
 ## 安装
 
 ```bash
-pip install keyfleet-llm        # 发行名是 keyfleet-llm（PyPI 上 keyfleet 是另一个项目），导入名仍是 keyfleet
+# 从 Release 装（Python ≥ 3.10，无依赖，装在哪个虚拟环境都行）
+pip install https://github.com/WhaleFYu/keyfleet/releases/download/v0.2.0/keyfleet_llm-0.2.0-py3-none-any.whl
+
 # 或者从源码装：
 git clone https://github.com/WhaleFYu/keyfleet && cd keyfleet && pip install -e .
 ```
+
+> 还没上 PyPI：注册页要求我解图形验证码，我不做这件事。发行名预留为 `keyfleet-llm`
+> （PyPI 上已存在的 `keyfleet` 是另一个做硬件安全密钥的项目，别搞混）。
 
 要求 Python ≥ 3.10；CI 在 3.10 / 3.11 / 3.12 上跑同一套测试。
 
