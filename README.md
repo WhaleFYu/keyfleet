@@ -69,11 +69,10 @@ Experiment web download traffic cap reached.
 
 ## 安装
 
-无需 pip 安装，复制目录或 `pip install -e .` 均可：
-
 ```bash
-git clone https://github.com/WhaleFYu/keyfleet
-cd keyfleet && python3 -m pip install -e .
+pip install keyfleet-llm        # 发行名是 keyfleet-llm（PyPI 上 keyfleet 是另一个项目），导入名仍是 keyfleet
+# 或者从源码装：
+git clone https://github.com/WhaleFYu/keyfleet && cd keyfleet && pip install -e .
 ```
 
 要求 Python ≥ 3.10；CI 在 3.10 / 3.11 / 3.12 上跑同一套测试。
@@ -108,15 +107,36 @@ cd keyfleet && python3 -m pip install -e .
 ## 命令行
 
 ```bash
-keyfleet check                  # 打 /models 验证每把 key 的活性
+keyfleet check                  # 并发体检：每把 key 现在到底还能不能用、不能是哪一种
 keyfleet status [--json]        # 今日花费、剩余额度、冷却剩余秒数
 keyfleet report --days 7        # 按天 × 端点汇总账本
 keyfleet ask "写个正则匹配 IPv6" -v   # 自动挑可用 key，-v 打印用了哪把、花多少
 ```
 
+### `check` 的输出长什么样
+
+五把 key，四种毛病，处置完全不同——把它打印出来，比再写一层重试有用：
+
+```
+$ keyfleet check
+OK   deepseek-chat      sk-a…9f21      212ms  62 个模型
+FAIL glm-4-flash        sk-z…11c0      180ms  HTTP 429 · 额度用完或被限流 · {"error":{"message":"API 调用频率超限"}}
+FAIL openrouter-backup  sk-o…73ab       95ms  HTTP 402 · 额度用完或被限流 · Insufficient credits
+FAIL moonshot-cn        sk-m…4d02      160ms  HTTP 401 · key 无效或被吊销
+FAIL some-proxy         sk-p…8e11        2ms  HTTP 429 · 本机出口被挡（换 key 无用）· 匹配 'traffic cap'
+
+合计: 可用 1 / 额度用完或被限流 2 / key 无效或被吊销 1 / 本机出口被挡 1
+  · key 无效或被吊销：从配置里删掉，别留着每次先撞一遍 401。
+  · 本机出口被挡：换 key 无效，先确认代理/网关。
+```
+
+- 只读观察：不记账、不动冷却表、不消耗额度（打 `/models`）。
+- 并发：默认 8 路，10 把 key 约 1 秒出结果；`-w` 可调。
+- `--json` 给监控用；报告里的报文会被裁短并抹掉像密钥的串，可以安全粘进 issue。
+
 ## 测试
 
-28 项检查，覆盖换 key、冷却、日上限硬闸门、账本一致性、key 不泄露、配置加载等：
+43 项检查，覆盖换 key、冷却、日上限硬闸门、账本一致性、key 不泄露、配置加载等：
 
 ```bash
 python3 tests/test_fleet.py     # 不需要联网，不需要监听端口

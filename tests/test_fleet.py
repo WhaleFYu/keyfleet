@@ -161,8 +161,33 @@ def main():
     f = Fleet([Endpoint("a", "https://x/v1", "sk-999999999999", "m1"), Endpoint("b", "https://x/v1", "", "m1")],
               opener=t)
     st = f.check()
-    check(st[0]["ok"] and st[0]["detail"] == "0 models", "/models 健康检查")
-    check(st[1]["ok"] is False and st[1]["detail"] == "no key", "空 key 报告为不可用")
+    check(st[0]["ok"] and st[0]["detail"] == "0 个模型", "/models 健康检查")
+    check(st[1]["ok"] is False and st[1]["kind"] == "missing" and "没有 key" in st[1]["detail"],
+          "空 key 报告为不可用")
+
+    # 10b. 体检要能分诊：额度尽 / 出口被挡 / 无效，处置各不相同
+    t = Fake({
+        "sk-aaaa0000q": [(402, "Insufficient Balance")],
+        "sk-bbbb0000g": [(429, "Experiment web download traffic cap reached.")],
+        "sk-cccc0000a": [(401, '{"error":{"message":"Invalid API key sk-cccc0000a1234567890"}}')],
+    })
+    f = Fleet([Endpoint("quota", "https://x/v1", "sk-aaaa0000q", "m1"),
+               Endpoint("gate", "https://y/v1", "sk-bbbb0000g", "m1"),
+               Endpoint("dead", "https://z/v1", "sk-cccc0000a", "m1")], opener=t)
+    rows = {r["endpoint"]: r for r in f.check()}
+    check(rows["quota"]["kind"] == "quota", "402 → 额度尽，不是 key 失效")
+    check(rows["gate"]["kind"] == "local-gate", "平台限额文案 → local-gate")
+    check(rows["dead"]["kind"] == "auth", "401 → key 失效")
+    check("sk-cccc0000a1234567890" not in rows["dead"]["detail"], "报告里不泄露完整 key")
+
+    # 10c. 体检不记账、不动冷却（只读观察）
+    t = Fake({"*": [(429, "slow down")]})
+    led2 = fresh()
+    e = Endpoint("n", "https://x/v1", "sk-123412341234", "m1")
+    f = Fleet([e], ledger=led2, opener=t)
+    f.check()
+    check(led2.calls_today() == 0, "体检不写账本")
+    check(not e.cooled_down(), "体检不触发冷却")
 
     # 11. token 粗估
     from keyfleet.core import estimate_tokens

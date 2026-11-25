@@ -6,7 +6,7 @@ import json
 import os
 import sys
 
-from .core import AllEndpointsFailed, BudgetExceeded, Fleet, LocalGateBlocked
+from .core import AllEndpointsFailed, BudgetExceeded, Fleet, HUMAN_KIND, LocalGateBlocked
 
 
 def _load(args):
@@ -17,11 +17,30 @@ def _load(args):
 
 def cmd_check(args):
     f = _load(args)
-    rows = f.check()
+    rows = f.check(workers=args.workers)
+    if args.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=1))
     width = max(len(r["endpoint"]) for r in rows)
     for r in rows:
         mark = "OK  " if r["ok"] else "FAIL"
         print(f"{mark} {r['endpoint']:<{width}}  {r['key']:<14}  {r.get('ms', 0):>5}ms  {r['detail']}")
+
+    # 一句结论 + 分诊建议。体检报告的用处不在表格，而在"接下来该删哪把、等哪把"。
+    counts = {}
+    for r in rows:
+        counts[r["kind"]] = counts.get(r["kind"], 0) + 1
+    print()
+    print("合计: " + " / ".join(f"{HUMAN_KIND.get(k, k)} {v}" for k, v in sorted(counts.items())))
+    hints = {
+        "auth": "key 无效或被吊销：从配置里删掉，别留着每次先撞一遍 401。",
+        "quota": "额度/限流：等冷却或充值；如果是免费额度，注意别把新 key 也搭进去。",
+        "local-gate": "本机出口被挡：换 key 无效，先确认代理/网关。",
+        "unreachable": "连不上：先查网络与 base_url，不是 key 的问题。",
+        "bad-request": "请求被拒：多半是模型名不在 /models 里，核对 model 字段。",
+    }
+    for kind in ("local-gate", "auth", "quota", "unreachable", "bad-request"):
+        if counts.get(kind):
+            print(f"  · {hints[kind]}")
     return 0 if all(r["ok"] for r in rows) else 1
 
 
@@ -79,7 +98,9 @@ def main(argv=None):
     ap.add_argument("-c", "--config", default="~/.keyfleet/fleet.json", help="配置文件路径")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("check", help="验证每把 key 的活性（打 /models）")
+    p = sub.add_parser("check", help="并发体检每把 key：可用 / 无效 / 额度尽 / 出口被挡")
+    p.add_argument("-j", "--json", action="store_true", help="输出 JSON（便于喂给监控）")
+    p.add_argument("-w", "--workers", type=int, default=8, help="并发数（默认 8）")
     p.set_defaults(func=cmd_check)
 
     p = sub.add_parser("status", help="今日花费 / 剩余额度 / 冷却状态")

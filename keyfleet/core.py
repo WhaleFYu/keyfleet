@@ -190,6 +190,26 @@ class Ledger:
         self.db.close()
 
 
+HUMAN_KIND = {
+    "ok": "可用",
+    "auth": "key 无效或被吊销",
+    "quota": "额度用完或被限流",
+    "local-gate": "本机出口被挡（换 key 无用）",
+    "server": "上游 5xx",
+    "bad-request": "请求被拒（多为模型名/参数不对）",
+    "unreachable": "连不上",
+    "missing": "没配 key",
+    "unknown": "未知",
+}
+
+
+def _clip(text: str, n: int = 120) -> str:
+    """裁短错误报文，并抹掉像密钥的串——体检报告常被粘进 issue。"""
+    t = re.sub(r"\s+", " ", (text or "")).strip()
+    t = re.sub(r"([A-Za-z0-9_-]{0,12})(sk|ak)-[A-Za-z0-9_-]{8,}", r"\1\2…", t)
+    return t[:n]
+
+
 # ---------------------------------------------------------------- result
 
 @dataclass
@@ -466,35 +486,68 @@ class Fleet:
         raise AllEndpointsFailed(attempts)
 
     # -- 健康检查 --------------------------------------------------
-    def check(self, timeout: float = 12.0) -> list[dict]:
-        """打 /models 验证每把 key 的活性；不改冷却表，只报告。"""
-        out = []
-        for ep in self.endpoints:
-            item = {"endpoint": ep.name, "key": ep.key_hint(), "ok": False, "detail": ""}
+    def check(self, timeout: float = 12.0, workers: int = 8) -> list[dict]:
+        """并发探活：每把 key 打一次 /models，给出一份"这台机器上的体检报告"。
+
+        与 chat() 的区别：这里**不动冷却表、不记账**，只回答一个问题——
+        我这把 key 现在还能不能用？不能的话，是哪一种不能？
+
+        分类沿用 chat() 那套（auth / quota / local-gate / server / bad-request），
+        因为"key 失效"、"额度用完"、"本机出口被挡住"的处置完全不同：
+        前者该删，中者该等或充值，后者换 key 一点用都没有。
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        def probe(ep: Endpoint) -> dict:
+            item = {"endpoint": ep.name, "key": ep.key_hint(), "ok": False,
+                    "kind": "unknown", "detail": "", "ms": 0}
             if not ep.api_key:
-                item["detail"] = "no key"
-                out.append(item)
-                continue
+                item["kind"] = "missing"
+                item["detail"] = "没有 key（环境变量为空）"
+                return item
             req = urllib.request.Request(
                 ep.models_url, headers={"Authorization": f"Bearer {ep.api_key}",
-                                        "User-Agent": "keyfleet/0.1"})
+                                        "User-Agent": "keyfleet/0.2"})
             t = time.time()
             try:
                 with self._opener(req, timeout=timeout) as resp:
                     body = resp.read().decode("utf-8", "replace")
                 item["ok"] = True
+                item["kind"] = "ok"
                 try:
                     models = json.loads(body).get("data") or []
-                    item["detail"] = f"{len(models)} models"
+                    item["detail"] = f"{len(models)} 个模型"
                 except Exception:
                     item["detail"] = "200"
             except urllib.error.HTTPError as e:
-                item["detail"] = f"HTTP {e.code} ({classify(e.code, '')})"
+                raw, hdrs = "", ""
+                try:
+                    raw = e.read(600).decode("utf-8", "replace")
+                except Exception:
+                    pass
+                try:
+                    hdrs = "\n".join(f"{k}: {v}" for k, v in (e.headers or {}).items())
+                except Exception:
+                    pass
+                kind = classify(e.code, raw)
+                if kind != "local-gate" and is_local_gate(e.code, raw, hdrs):
+                    kind = "local-gate"
+                item["kind"] = kind
+                item["detail"] = f"HTTP {e.code} · {HUMAN_KIND.get(kind, kind)}"
+                if kind != "auth":
+                    item["detail"] += f" · {_clip(raw)}"
             except Exception as e:
-                item["detail"] = f"{type(e).__name__}"
+                item["kind"] = "unreachable"
+                item["detail"] = f"{type(e).__name__}: {_clip(str(e))}"
             item["ms"] = int((time.time() - t) * 1000)
-            out.append(item)
-        return out
+            return item
+
+        n = max(1, min(workers, len(self.endpoints)))
+        if n == 1:
+            return [probe(ep) for ep in self.endpoints]
+        with ThreadPoolExecutor(max_workers=n) as pool:
+            return list(pool.map(probe, self.endpoints))
+
 
     def close(self) -> None:
         self.ledger.close()
