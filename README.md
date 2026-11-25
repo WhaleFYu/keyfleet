@@ -53,7 +53,7 @@ git clone https://github.com/WhaleFYu/keyfleet
 cd keyfleet && python3 -m pip install -e .
 ```
 
-要求 Python ≥ 3.9（开发与测试在 3.12 上）。
+要求 Python ≥ 3.10；CI 在 3.10 / 3.11 / 3.12 上跑同一套测试。
 
 ## 配置
 

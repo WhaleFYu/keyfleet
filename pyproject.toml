@@ -7,7 +7,7 @@ name = "keyfleet"
 version = "0.1.0"
 description = "Zero-dependency failover + spend caps for multiple OpenAI-compatible API keys"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 keywords = ["llm", "openai", "api-keys", "failover", "budget", "rate-limit"]
 dependencies = []
