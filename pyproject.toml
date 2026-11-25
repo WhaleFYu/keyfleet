@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "keyfleet"
+version = "0.1.0"
+description = "Zero-dependency failover + spend caps for multiple OpenAI-compatible API keys"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+keywords = ["llm", "openai", "api-keys", "failover", "budget", "rate-limit"]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/WhaleFYu/keyfleet"
+
+[project.scripts]
+keyfleet = "keyfleet.cli:main"
+
+[tool.setuptools]
+packages = ["keyfleet"]
