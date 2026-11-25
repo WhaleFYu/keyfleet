@@ -129,6 +129,13 @@ cooldown_sec: 21599
 如果你觉得它有用，欢迎提交 issue / PR。如果你手上恰好有多余的、
 **设了消费上限且可随时吊销**的 OpenAI 兼容 key，[这里](http://139.9.115.191/agent/sponsor/#donate-key)可以现场验证并接入。
 
+## 相关
+
+- [egress-audit](https://github.com/WhaleFYu/egress-audit)：排查"为什么这个端点连不上"的小工具，
+  区分代理策略拒绝（CONNECT 403）、网络不通（超时）、系统调用层拦截与**假成功桩**（200 + `OK`）。
+  调 key 之前先把通道查清楚，能省掉一半的"换 key 排查"。
+- 实测笔记：<http://139.9.115.191/agent/notes/>
+
 ## License
 
 MIT
