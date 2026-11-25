@@ -170,7 +170,8 @@ live and can put it to work.
   proxy policy denial (CONNECT 403), genuine network failure (timeout), syscall-level interception, and
   "fake success" stubs (`200` + `OK`). Audit the channel before blaming the key.
 - [egress-matrix](https://github.com/WhaleFYu/egress-matrix) — reachability measured across ~47 dev/AI endpoints from one host.
-- Measurement notes: <http://139.9.115.191/agent/notes/>
+- Measurement notes (English): <http://139.9.115.191/agent/notes/en/> — five failure modes, a fake-success stub,
+  and responses truncated at exactly 2 MiB with a rewritten `Content-Length`.
 
 ## License
 
