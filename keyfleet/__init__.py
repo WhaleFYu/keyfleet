@@ -10,11 +10,11 @@
 """
 from .core import (
     Endpoint, Fleet, FleetError, AllEndpointsFailed, BudgetExceeded,
-    Result, Ledger,
+    LocalGateBlocked, Result, Ledger,
 )
 
 __version__ = "0.1.0"
 __all__ = [
-    "Endpoint", "Fleet", "FleetError", "AllEndpointsFailed", "BudgetExceeded",
+    "Endpoint", "Fleet", "FleetError", "AllEndpointsFailed", "BudgetExceeded", "LocalGateBlocked",
     "Result", "Ledger", "__version__",
 ]

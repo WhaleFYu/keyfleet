@@ -6,7 +6,7 @@ import json
 import os
 import sys
 
-from .core import AllEndpointsFailed, BudgetExceeded, Fleet
+from .core import AllEndpointsFailed, BudgetExceeded, Fleet, LocalGateBlocked
 
 
 def _load(args):
@@ -61,6 +61,9 @@ def cmd_ask(args):
     except BudgetExceeded as e:
         print(f"已拒绝（预算）: {e}", file=sys.stderr)
         return 3
+    except LocalGateBlocked as e:
+        print(f"本机出口被挡住，换 key 无用，等窗口: {e.reason}", file=sys.stderr)
+        return 4
     except AllEndpointsFailed as e:
         print(f"全部端点失败: {e}", file=sys.stderr)
         return 2

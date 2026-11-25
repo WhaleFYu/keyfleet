@@ -5,7 +5,7 @@ Fleet 的 opener 参数就是注入点：任何 `opener(req, timeout=...) -> 响
 import io, json, os, sys, tempfile, time, urllib.error
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from keyfleet import Endpoint, Fleet, Ledger, AllEndpointsFailed, BudgetExceeded
-from keyfleet.core import _FetchError
+from keyfleet.core import _FetchError, LocalGateBlocked, classify, is_local_gate
 
 OK_BODY = {"model": "stub", "choices": [{"message": {"content": "hello from stub"}}],
            "usage": {"prompt_tokens": 100, "completion_tokens": 50}}
@@ -192,6 +192,32 @@ def main():
         check(False, "全挂应抛 AllEndpointsFailed")
     except AllEndpointsFailed as ex:
         check("a=" in str(ex), "AllEndpointsFailed 带每次尝试细节")
+
+
+    # 14. 平台出口限额（假 429）不能被算成 key 的问题
+    check(classify(429, "Experiment web download traffic cap reached.") == "local-gate",
+          "限额文案 → local-gate 而不是 quota")
+    check(classify(429, '{"error":{"message":"Rate limit reached"}}') == "quota",
+          "上游真 429 仍是 quota")
+    check(is_local_gate(403, "blocked by egress policy") != "", "策略拒绝文案能识别")
+    check(is_local_gate(429, "whatever", "Content-Type: text/plain") != "",
+          "429+text/plain+无 request-id 视为中间层")
+    check(is_local_gate(429, "whatever", "Content-Type: application/json\nX-Request-Id: abc") == "",
+          "带 request-id 的 JSON 429 不误判")
+
+    led = fresh()
+    t = Fake({"*": [(429, "Experiment web download traffic cap reached.")]})
+    e1 = Endpoint("k1", "https://x/v1", "sk-000000000001", "m1", priority=0)
+    e2 = Endpoint("k2", "https://x/v1", "sk-000000000002", "m1", priority=10)
+    f = Fleet([e1, e2], ledger=led, opener=t)
+    try:
+        f.chat([{"role": "user", "content": "x"}])
+        check(False, "出口限额应抛 LocalGateBlocked")
+    except LocalGateBlocked as ex:
+        check("gate" in str(ex) or ex.reason, "LocalGateBlocked 带原因")
+    check(len(t.calls) == 1, "出口限额后立刻停手，不再拿第二把 key 去撞同一扇门")
+    check(e1.cooldown_until - time.time() < 3600, "没有把 key 停用 6 小时")
+    check(e2.cooldown_until < time.time(), "备用 key 完全没被牵连")
 
     print(f"\n{len(CHECKS)} checks passed")
     return 0

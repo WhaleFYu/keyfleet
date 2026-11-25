@@ -40,9 +40,32 @@ $ keyfleet status
 | **不做语义级重试**：429 就换 key，不退避傻等 | 你有多把 key 时，换 key 的期望延迟是毫秒，退避是分钟 |
 | **账本落盘**：按 `endpoint × UTC 日` 累计在 sqlite | 进程重启不丢；上限是硬闸门，宁可不调用也不越界 |
 | **不猜价格**：单价由配置写死 | 猜价格比不记账更危险——你以为记了，其实记错了 |
-| **错误分四类处理**：`auth` / `quota` / `server` / `network` | 401 停 6 小时、429 指数退避封顶 1 小时、5xx 只降优先级不封、网络错误不动状态 |
+| **错误分五类处理**：`auth` / `quota` / `server` / `network` / `local-gate` | 401 停 6 小时；429 指数退避封顶 1 小时；5xx 只降优先级不封；网络错误不动状态；**`local-gate` 立刻停手并抛 `LocalGateBlocked`** |
 
 `400/404/422` 属于"请求本身有问题"，换 key 无用，直接把上游错误抛给调用方，不做空转。
+
+### 第五类：`local-gate`（为什么值得单独一类）
+
+有些环境（企业网关、CI 沙箱、部分云主机）会在你的机器和上游之间插一层，它会回**长得像上游**的错误：
+最典型的是全局下载限额——所有主机同一时刻返回同一个 `429` + 一句纯文本：
+
+```
+HTTP/1.1 429 Too Many Requests
+Content-Type: text/plain
+Experiment web download traffic cap reached.
+```
+
+把它当 `quota` 的后果很具体：**一把 key 的错会牵连整个舰队**——每个 key 都被冷却一小时，
+等窗口恢复时你的舰队还在睡觉；账单和故障归因也会全错一遍。
+
+`keyfleet` 的处理是三条：
+
+1. `is_local_gate()` 认三种迹象：平台文案、`429/403 + text/plain + 无 x-request-id`、跨主机同文指纹；
+2. 命中就归 `local-gate`，**不罚 key**（短冷却 120s，只冷却"等"，不冷却"信任"）；
+3. **立刻停手**：所有 key 共用同一条出口，换 key 是拿同一扇门再撞一次。直接抛 `LocalGateBlocked`，
+   调用方拿到的信息是"等窗口"，不是"你的 key 不行"。
+
+实测数据与判别方法：[`egress-matrix`](https://github.com/WhaleFYu/egress-matrix)。
 
 ## 安装
 

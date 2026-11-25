@@ -38,6 +38,19 @@ class BudgetExceeded(FleetError):
     pass
 
 
+class LocalGateBlocked(FleetError):
+    """整条出口被本机/平台网关挡住（限额、策略、中间人），换 key 解决不了。
+
+    单独一类，是因为处置完全不同：不要退避重试、不要吊销任何 key、
+    不要把这个现象报成"上游限流"——上游根本没收到请求。
+    """
+
+    def __init__(self, reason: str, attempts: list[dict] | None = None):
+        self.reason = reason
+        self.attempts = attempts or []
+        super().__init__(f"local egress gate blocked the whole fleet: {reason}")
+
+
 # ---------------------------------------------------------------- endpoint
 
 @dataclass
@@ -196,14 +209,45 @@ class Result:
 class _FetchError(Exception):
     def __init__(self, kind: str, status: int | None, message: str):
         super().__init__(message)
-        self.kind = kind          # auth | quota | server | network | bad-request | unknown
+        self.kind = kind          # auth | quota | server | network | bad-request | local-gate | unknown
         self.status = status
         self.message = message
 
 
-def classify(status: int, body: str) -> str:
-    """把 HTTP 状态码 + 响应体归到 4 类处置逻辑里。"""
+# 本机出口/平台网关的"假 429"标志：报文不是上游写的，是中间那层写的。
+# 命中时**不能**把账算在 key 头上——否则一次平台限额会把所有 key 全部拉黑一小时，
+# 而等到窗口恢复时，你的舰队还在冷却期里空转。实测见 egress-matrix 仓库。
+LOCAL_GATE_MARKERS = (
+    "experiment web download traffic cap reached",
+    "download traffic cap",
+    "proxy policy",
+    "egress policy",
+    "blocked by policy",
+)
+
+
+def is_local_gate(status: int | None, body: str, headers: str = "") -> str:
+    """看起来像上游错误、其实是本机出口在回话吗？返回一句原因，不是就返回空串。
+
+    三个判别点（任一成立即可，越靠前越确定）：
+      1. 报文里带平台的限额/策略文案；
+      2. 404/429 之类的状态码，但响应是 text/plain 且没有上游的 request-id 类头；
+      3. 调用方显式把一个"跨主机同文"的 body 指纹传进来（见 Fleet.detect_global_gate）。
+    """
     low = (body or "").lower()
+    for m in LOCAL_GATE_MARKERS:
+        if m in low:
+            return f"本机出口/平台网关回话（匹配 {m!r}）"
+    if status in (429, 403) and "text/plain" in (headers or "").lower() and "x-request-id" not in (headers or "").lower():
+        return "429/403 + text/plain + 无上游 request-id：像中间层，不像上游"
+    return ""
+
+
+def classify(status: int, body: str) -> str:
+    """把 HTTP 状态码 + 响应体归到几类处置逻辑里。"""
+    low = (body or "").lower()
+    if is_local_gate(status, body):
+        return "local-gate"      # 不罚 key，只等窗口
     if status in (401, 403):
         return "auth"
     if status == 402 or "insufficient" in low or "quota" in low or "balance" in low:
@@ -230,6 +274,7 @@ def estimate_tokens(text: str) -> int:
 _BACKOFF = {  # kind -> (首次退避秒, 上限秒)
     "auth": (6 * 3600, 6 * 3600),
     "quota": (300, 3600),
+    "local-gate": (120, 900),   # 平台限额窗口通常以分钟计；罚 key 是错的，罚"等"才对
 }
 
 
@@ -339,7 +384,15 @@ class Fleet:
                 body = e.read().decode("utf-8", "replace")[:600]
             except Exception:
                 pass
-            raise _FetchError(classify(e.code, body), e.code, f"HTTP {e.code}: {body[:200]}")
+            hdrs = ""
+            try:
+                hdrs = "\n".join(f"{k}: {v}" for k, v in (e.headers or {}).items())
+            except Exception:
+                pass
+            kind = classify(e.code, body)
+            if kind not in ("local-gate",) and is_local_gate(e.code, body, hdrs):
+                kind = "local-gate"
+            raise _FetchError(kind, e.code, f"HTTP {e.code}: {body[:200]}")
         except urllib.error.URLError as e:
             raise _FetchError("network", None, f"network: {e.reason}")
         except (TimeoutError, OSError) as e:
@@ -382,6 +435,10 @@ class Fleet:
                 attempts.append({"endpoint": ep.name, "error": f"{e.kind}: {e.message}"})
                 self.ledger.record(ep.name, mdl or "", 0, 0, 0.0, False, f"{e.kind}: {e.message}")
                 self._penalize(ep, e.kind)
+                if e.kind == "local-gate":
+                    # 所有 key 共用同一条出口：换 key、换端点都无意义，直接告诉调用方等窗口
+                    self.last_attempts = attempts
+                    raise LocalGateBlocked(e.message, attempts) from None
                 if e.kind == "bad-request":
                     # 请求本身有问题，换 key 无用；直接把上游错误抛给调用方
                     self.last_attempts = attempts
